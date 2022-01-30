@@ -8,7 +8,7 @@ export BASE_DIR=/disk1/sajad/datasets/sci/arxivL/
 export RAW_PATH=$BASE_DIR/single-files
 export SAVE_JSON=$BASE_DIR/jsons/intro-normal-BertScore-full/
 #export BERT_DIR=$BASE_DIR/bert-files/arXivL-2048-absNegReferece-tgtIncluded-reduced/
-export BERT_DIR=$BASE_DIR/bert-files/arxivl-2048-graph-test/
+export BERT_DIR=$BASE_DIR/bert-files/arxivl-2048-graph-tgt/
 
 
 #echo "Starting to write aggregated json files..."

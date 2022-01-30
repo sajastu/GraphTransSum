@@ -12,6 +12,8 @@ class Node():
         self.s_txt = s_node_txt
         self.e_txt = e_node_txt
         self.st_lemma_txt = s_node_lemma
+        self.tgt_subgraph = None
+        self.src_subgraph = None
 
     def __str__(self):
         return f'({self.ss_idx}, {self.st_idx}, {self.s_txt}) ==> ({self.es_idx}, {self.et_idx}, {self.e_txt})'
@@ -53,7 +55,6 @@ class Graph():
 
 
     def set_nodes_and_edges(self, bert_nodes_len):
-
         # Creating nodes in the graph
         for node in self.sentence_edges:
             dest_sent_info = node.ss_idx
@@ -90,15 +91,14 @@ class Graph():
             )
 
 
-    def add_connections_with_tgt(self, tgt_subgraph):
-        self.src_subgraph = self
-        self.tgt_subgraph = tgt_subgraph
 
-        for src_node in self.src_subgraph.sentence_edges:
+
+    def add_connections_with_tgt(self, tgt_subgraph):
+        self.tgt_subgraph = tgt_subgraph
+        for src_node in self.sentence_edges:
             src_start_token_idx = src_node.st_idx
             src_start_token_lemma = src_node.st_lemma_txt
-
-            for tgt_node in self.tgt_subgraph.sentence_edge:
+            for tgt_node in self.tgt_subgraph.sentence_edges:
                 tgt_start_token_idx = tgt_node.st_idx
                 tgt_start_token_lemma = tgt_node.st_lemma_txt
 
