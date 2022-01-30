@@ -235,21 +235,23 @@ class LongformerData():
 
         return new_src_tokens, tmp_lemma_tokens, tmp_lemma_tokens_tgt
 
-    def _annotate_src(self, src_tokens, src_lemmas, tgt_lemmas, bert_nodes_len, id):
+    def _annotate(self, src_tokens, src_lemmas, tgt_tokens, tgt_lemmas, src_bert_nodes_len, tgt_bert_nodes_len, id, include_tgt=False):
 
         """
 
         :param src_tokens: tokens of source
+        :param tgt_tokens: tokens of target
         :param src_lemmas: lemmas of source words
         :param tgt_lemmas: lemmas of target words
-        :param bert_nodes_len: size of bert embeddings (will be used to create the graph nodes)
+        :param src_bert_nodes_len: size of bert embeddings of source (will be used to create the graph nodes)
+        :param tgt_bert_nodes_len: size of bert embeddings of tokens (will be used to create the graph nodes)
         :param id: paper_id for debugging
         :return: a graph from Graph() class
 
         IMPORTANT NOTE: should check if graph's edge doesn't violate node dimensionality...
         """
 
-        def _find_common_words(s_token_idx, query, search_in, idx_sent, idx_sent_end, tgt_tokens):
+        def _find_common_words(s_token_idx, query, search_in, idx_sent, idx_sent_end):
             commonalities = []
             idx_sent_query = idx_sent
             idx_sent_search = idx_sent + 1
@@ -257,35 +259,48 @@ class LongformerData():
                 for idx, token in enumerate(sent):
                     if query in stopwords:
                         return []
-                    if query == token and len(query) > 2 and query in tgt_tokens:
-                        commonalities.append(Node(idx_sent_query, s_token_idx, idx_sent_search, idx, query, token))
+                    if query == token and len(query) > 2:
+                        commonalities.append(
+                            Node(idx_sent_query, s_token_idx, idx_sent_search, idx, query, token)
+                        )
 
                 idx_sent_search += 1
 
             return commonalities
 
         graph = Graph()
+        tgt_subgraph = Graph()
         src_lemma_tokens = src_lemmas
-
-
 
         """""""""""""""""""""""""""""""""""
         1. connect intra-sentence tokens
         """""""""""""""""""""""""""""""""""
-
+        # add to src subgraph
         for idx_sent, sent in enumerate(src_lemma_tokens):
             for idx_token, token in enumerate(sent):
-                common_node = _find_common_words(idx_token, token, src_lemma_tokens[idx_sent+1: ], idx_sent, len(src_lemma_tokens), [item for sublist in tgt_lemmas for item in sublist])
+                common_node = _find_common_words(idx_token, token, src_lemma_tokens[idx_sent+1: ], idx_sent, len(src_lemma_tokens))
                 if len(common_node) > 0:
                     graph.add_edge_batch(common_node)
+
+        # add to tgt subgraph
+        for idx_sent, sent in enumerate(tgt_lemmas):
+            for idx_token, token in enumerate(sent):
+                common_node = _find_common_words(idx_token, token, tgt_lemmas[idx_sent+1: ], idx_sent, len(tgt_lemmas))
+                if len(common_node) > 0:
+                    tgt_subgraph.add_edge_batch(common_node)
 
         """""""""""""""""""""""""""""""""""
         2. connect tokens to the associated sentence
         """""""""""""""""""""""""""""""""""
-
+        # add to src subgraph
         for idx_sent, sent in enumerate(src_tokens):
             for idx_token, token in enumerate(sent):
-                graph.add_edge(Node(idx_sent, idx_token, s_node_txt=token, e_node_txt=' '.join(sent)))
+                graph.add_edge(Node(idx_sent, idx_token, s_node_txt=token, e_node_txt=' '.join(sent), s_node_lemma=src_lemma_tokens[idx_sent][idx_token]))
+
+        # add to tgt subgraph
+        for idx_sent, sent in enumerate(tgt_tokens):
+            for idx_token, token in enumerate(sent):
+                tgt_subgraph.add_edge(Node(idx_sent, idx_token, s_node_txt=token, e_node_txt=' '.join(sent), s_node_lemma=tgt_lemmas[idx_sent][idx_token]))
 
 
         """""""""""""""""""""""""""""""""""
@@ -294,17 +309,28 @@ class LongformerData():
 
         src_subtokens = []
         src_subtokens_flat = []
-        lm_sent_len = []
+        lm_src_sent_len = []
         for idx_sent, sent in enumerate(src_tokens):
             sent_subtokens = [['<s>']] + self.tokenizer.tokenize_2d(sent) + [['</s>']]
             src_subtokens.append(sent_subtokens)
             for subtokens in sent_subtokens:
                 src_subtokens_flat.extend(subtokens)
-            lm_sent_len.append(sum([len(t) for t in sent_subtokens]))
+            lm_src_sent_len.append(sum([len(t) for t in sent_subtokens]))
+
+        tgt_subtokens = []
+        tgt_subtokens_flat = []
+        lm_tgt_sent_len = []
+        for idx_sent, sent in enumerate(tgt_tokens):
+            sent_subtokens = [['<s>']] + self.tokenizer.tokenize_2d(sent) + [['</s>']]
+            tgt_subtokens.append(sent_subtokens)
+            for subtokens in sent_subtokens:
+                tgt_subtokens_flat.extend(subtokens)
+            lm_tgt_sent_len.append(sum([len(t) for t in sent_subtokens]))
 
         """""""""""""""""""""""""""""""""""
         4. Replacing Graph IDs according to LM tokens
         """""""""""""""""""""""""""""""""""
+        # replacing source sub-graph
         for node in graph:
             try:
                 # sent idxs
@@ -320,7 +346,7 @@ class LongformerData():
 
                 start_token_idx = (
                     (
-                            ( ( (sum(lm_sent_len[:ss_idx]))) + ( sum([len(t) for t in src_subtokens[ss_idx][:st_idx]])) )
+                            ( ( (sum(lm_src_sent_len[:ss_idx]))) + ( sum([len(t) for t in src_subtokens[ss_idx][:st_idx]])) )
                     )
                 )
 
@@ -328,7 +354,7 @@ class LongformerData():
                 lm_tokens_end = []
                 if et_idx is not None:
                     lm_tokens_end = src_subtokens[es_idx][et_idx]
-                    end_token_idx = (((sum(lm_sent_len[:es_idx]))) + ( (sum([len(t) for t in src_subtokens[es_idx][:et_idx]])) ))
+                    end_token_idx = (((sum(lm_src_sent_len[:es_idx]))) + ( (sum([len(t) for t in src_subtokens[es_idx][:et_idx]])) ))
 
                 # src_subtokens_flat
 
@@ -363,21 +389,92 @@ class LongformerData():
 
 
                 if len(lm_tokens_end) == 0:
-                    node.ss_idx = ((sum(lm_sent_len[:ss_idx])),)
+                    node.ss_idx = ((sum(lm_src_sent_len[:ss_idx])),)
 
             except Exception as e:
                 print(e)
                 print('error')
                 os._exit(-1)
                 # import pdb;pdb.set_trace()
+        graph.set_nodes_and_edges(src_bert_nodes_len)
 
-        graph.set_nodes_and_edges(bert_nodes_len)
+        # replacing source sub-graph
+        for node in tgt_subgraph:
+            try:
+                # sent idxs
+                ss_idx = node.ss_idx # start
+                es_idx = node.es_idx # end
+
+                # token idxs
+                st_idx = node.st_idx + 1 # start  # + 1 b/c of <s>
+                et_idx = node.et_idx + 1 if node.et_idx is not None else None # end
+
+                # retrieve associated tokens from LM
+                lm_tokens_start = tgt_subtokens[ss_idx][st_idx]
+
+                start_token_idx = (
+                    (
+                            ( ( (sum(lm_tgt_sent_len[:ss_idx]))) + ( sum([len(t) for t in tgt_subtokens[ss_idx][:st_idx]])) )
+                    )
+                )
+
+
+                lm_tokens_end = []
+                if et_idx is not None:
+                    lm_tokens_end = tgt_subtokens[es_idx][et_idx]
+                    end_token_idx = (((sum(lm_tgt_sent_len[:es_idx]))) + ( (sum([len(t) for t in tgt_subtokens[es_idx][:et_idx]])) ))
+
+                # src_subtokens_flat
+
+                if len(lm_tokens_start) == 1:
+                    node.st_idx = (start_token_idx, )
+
+                elif len(lm_tokens_start) > 1:
+
+                    populater = len(lm_tokens_start)-1
+                    tuple = (start_token_idx, )
+
+                    # print(src_subtokens_flat[tuple[0]])
+                    while populater != 0:
+                        tuple = tuple + (tuple[-1] + 1, )
+                        populater -= 1
+                    node.st_idx = tuple
+
+
+                if len(lm_tokens_end) == 1:
+                    # print(node)
+                    node.et_idx = (end_token_idx, )
+
+
+                elif len(lm_tokens_end) > 1:
+                    populater = len(lm_tokens_end) - 1
+                    tuple = (end_token_idx,)
+                    while populater != 0:
+                        tuple = tuple + (tuple[-1] + 1,)
+                        populater -= 1
+                    node.et_idx = tuple
+
+
+
+                if len(lm_tokens_end) == 0:
+                    node.ss_idx = ((sum(lm_src_sent_len[:ss_idx])),)
+
+            except Exception as e:
+                print(e)
+                print('error')
+                os._exit(-1)
+                # import pdb;pdb.set_trace()
+        tgt_subgraph.set_nodes_and_edges(tgt_bert_nodes_len)
+
+        graph.add_connections_with_tgt(tgt_subgraph)
 
         return graph
 
 
-    def _construct_graph(self, src_tokens, src_lemmas, tgt_tokens, bert_nodes_len, id):
-        return self._annotate_src(src_tokens, src_lemmas, tgt_tokens, bert_nodes_len, id)
+    def _construct_graph(self, src_tokens, src_lemmas, tgt_tokens, tgt_lemmas, src_bert_nodes_len, tgt_bert_nodes_len, id):
+
+
+        src_graph = self._annotate(src_tokens, src_lemmas, tgt_tokens, tgt_lemmas, src_bert_nodes_len, tgt_bert_nodes_len, id, include_tgt=True)
 
 
     def preprocess_single(self, src, tgt, sent_rg_scores=None, sent_rg_scores_intro=None, sent_labels=None,
@@ -476,8 +573,8 @@ class LongformerData():
             tgt_subtokens = self.tokenizer.tokenize(tgt_txt.split())
             tgt_subtokens = [self.cls_token] + tgt_subtokens + [self.sep_token]
 
-            tgt_subtokens_idxs = self.tokenizer.convert_tokens_to_ids(tgt_subtokens)
-            intro_summary_subtokens_idxs = self.tokenizer.convert_tokens_to_ids(intro_summary_subtokens)
+            tgt_subtokens_ids = self.tokenizer.convert_tokens_to_ids(tgt_subtokens)
+            intro_summary_subtokens_ids = self.tokenizer.convert_tokens_to_ids(intro_summary_subtokens)
 
             _segs = [-1] + [i for i, t in enumerate(src_subtoken_ids) if t == self.sep_vid]
             segs = [_segs[i] - _segs[i - 1] for i in range(1, len(_segs))]
@@ -489,7 +586,7 @@ class LongformerData():
                 else:
                     segments_ids += s * [1]
 
-            _segs_intro_summary = [-1] + [i for i, t in enumerate(intro_summary_subtokens_idxs) if t == self.sep_vid]
+            _segs_intro_summary = [-1] + [i for i, t in enumerate(intro_summary_subtokens_ids) if t == self.sep_vid]
             segs_intro_summary = [_segs_intro_summary[i] - _segs_intro_summary[i - 1] for i in
                                   range(1, len(_segs_intro_summary))]
             segments_ids_intro = []
@@ -499,7 +596,7 @@ class LongformerData():
                 else:
                     segments_ids_intro += s * [1]
 
-            _segs_tgt = [-1] + [i for i, t in enumerate(tgt_subtokens_idxs) if t == self.sep_vid]
+            _segs_tgt = [-1] + [i for i, t in enumerate(tgt_subtokens_ids) if t == self.sep_vid]
             segs_tgt = [_segs_tgt[i] - _segs_tgt[i - 1] for i in
                                   range(1, len(_segs_tgt))]
             segments_ids_tgt = []
@@ -512,7 +609,7 @@ class LongformerData():
             cls_indxes = [i for i, t in enumerate(src_subtoken_ids) if t == self.cls_vid]
             # low_sents_cls_indxes = [[i for i, t in enumerate(low_sents_subtokens_idx) if t == self.cls_vid] for low_sents_subtokens_idx  in low_sents_subtokens_idxs]
 
-            tgt_cls_indxes = [i for i, t in enumerate(tgt_subtokens_idxs) if t == self.cls_vid]
+            tgt_cls_indxes = [i for i, t in enumerate(tgt_subtokens_ids) if t == self.cls_vid]
             sent_labels = sent_labels[:len(cls_indxes)]
 
 
@@ -541,12 +638,12 @@ class LongformerData():
             print(e)
 
         ## constructing graph
-        graph = self._construct_graph(src_txt_tokens, src_lemmas, tgt_lemmas, len(src_subtoken_ids), id)
+        graph = self._construct_graph(src_txt_tokens, src_lemmas, tgt_tokens, tgt_lemmas, len(src_subtoken_ids), len(tgt_subtokens_ids), id)
 
 
         # import pdb;pdb.set_trace()
 
-        return src_subtoken_ids, intro_summary_subtokens_idxs, tgt_subtokens_idxs, neg_subtokens_idxs, pos_sents_subtokens_idxs, sent_rg_scores, sent_labels, segments_ids,\
+        return src_subtoken_ids, intro_summary_subtokens_ids, tgt_subtokens_ids, neg_subtokens_idxs, pos_sents_subtokens_idxs, sent_rg_scores, sent_labels, segments_ids,\
                segments_ids_intro, segments_ids_tgt, cls_indxes, neg_sents_cls_indxes, pos_sents_cls_indxes, tgt_cls_indxes, original_src_txt_str, tgt_txt, src_sents_number, src_sent_token_count, \
                sent_rg_scores_intro, src_txt_tokens, tgt_tokens, graph
 
