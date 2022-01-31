@@ -217,6 +217,7 @@ class LongformerData():
         tmp_lemma_tokens = []
         tmp_lemma_tokens_tgt = []
         new_src_tokens = []
+        new_tgt_tokens = []
         for idx_sent, sent in enumerate(src_tokens):
             tmp_lemma_tokens.append([])
             new_src_tokens.append([])
@@ -229,11 +230,13 @@ class LongformerData():
         for idx_sent, sent in enumerate(tgt_tokens):
             tmp_lemma_tokens_tgt.append([])
             sent_txt = ' '.join(sent)
+            new_tgt_tokens.append([])
             sent_tokens = nlp(sent_txt)
             for idx_token, token in enumerate(sent_tokens):
                 tmp_lemma_tokens_tgt[idx_sent].append(token.lemma_)
+                new_tgt_tokens[idx_sent].append(token.text)
 
-        return new_src_tokens, tmp_lemma_tokens, tmp_lemma_tokens_tgt
+        return new_src_tokens, tmp_lemma_tokens, tmp_lemma_tokens_tgt, new_tgt_tokens
 
     def _annotate(self, src_tokens, src_lemmas, tgt_tokens, tgt_lemmas, src_bert_nodes_len, tgt_bert_nodes_len, id, include_tgt=False, is_test=False):
 
@@ -411,10 +414,10 @@ class LongformerData():
                 try:
                     # sent idxs
                     ss_idx = node.ss_idx # start
-                    es_idx = node.es_idx # end
-
                     # token idxs
                     st_idx = node.st_idx + 1 # start  # + 1 b/c of <s>
+
+                    es_idx = node.es_idx # end
                     et_idx = node.et_idx + 1 if node.et_idx is not None else None # end
 
                     # retrieve associated tokens from LM
@@ -465,11 +468,12 @@ class LongformerData():
 
 
                     if len(lm_tokens_end) == 0:
-                        node.ss_idx = ((sum(lm_src_sent_len[:ss_idx])),)
+                        node.ss_idx = ((sum(lm_tgt_sent_len[:ss_idx])),)
 
                 except Exception as e:
                     print(e)
-                    print('error')
+                    import pdb;pdb.set_trace()
+                    print(f'error-2: {id}')
                     os._exit(-1)
                     # import pdb;pdb.set_trace()
             tgt_subgraph.set_nodes_and_edges(tgt_bert_nodes_len)
@@ -479,7 +483,7 @@ class LongformerData():
 
 
     def _construct_graph(self, src_tokens, src_lemmas, tgt_tokens, tgt_lemmas, src_bert_nodes_len, tgt_bert_nodes_len, id, is_test=False):
-        return self._annotate(src_tokens, src_lemmas, tgt_tokens, tgt_lemmas, src_bert_nodes_len, tgt_bert_nodes_len, id, include_tgt=True, is_test=False)
+        return self._annotate(src_tokens, src_lemmas, tgt_tokens, tgt_lemmas, src_bert_nodes_len, tgt_bert_nodes_len, id, include_tgt=True, is_test=is_test)
 
 
     def preprocess_single(self, src, tgt, sent_rg_scores=None, sent_rg_scores_intro=None, sent_labels=None,
@@ -505,8 +509,7 @@ class LongformerData():
         sent_labels = [sent_labels[i] for i in idxs]
 
         original_src_txt_str = [' '.join(s[0]) for s in src]
-
-        src_txt_tokens, src_lemmas, tgt_lemmas = self.normal_tokenize_new([s[0] for s in src], tgt)
+        src_txt_tokens, src_lemmas, tgt_lemmas, tgt = self.normal_tokenize_new([s[0] for s in src], tgt)
 
         src = [(src_txt_tokens[j], ) + tuple(s[1:]) for j, s in enumerate(src)]
 
@@ -715,7 +718,7 @@ def _format_to_bert(params):
     intro_labels_count = []
     intro_labels_len_count = []
 
-    is_test = corpus_type == 'test'
+    is_test = corpus_type == 'test' or 'val'
 
     CHUNK_SIZE_CONST=-1
     if args.model_name == 'longformer':
@@ -729,6 +732,10 @@ def _format_to_bert(params):
     for j, data in tqdm(enumerate(jobs[debug_idx-1:]), total=len(jobs[debug_idx-1:])):
         try:
             paper_id, data_src, data_tgt, data_summary_intro = data['id'], data['src'], data['tgt'], data['intro_summary']
+
+            # if paper_id != '0912.3283':
+            #     continue
+
             if not isinstance(data_src[0][0], int):
                 data_src = [[idx] + s for idx, s in enumerate(data_src)]
 
@@ -896,6 +903,7 @@ def _format_to_bert(params):
 
 ################################### LINE FUNCTIONS #############################
 # line function
+
 def format_to_lines(args):
     if args.dataset != '':
         corpuses_type = [args.dataset]
@@ -1024,7 +1032,6 @@ def count_dots(txt):
         if char == '.':
             result += 1
     return result
-
 
 def check_path_existence(dir):
     if os.path.exists(dir):
