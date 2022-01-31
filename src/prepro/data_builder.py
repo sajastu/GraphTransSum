@@ -238,7 +238,7 @@ class LongformerData():
 
         return new_src_tokens, tmp_lemma_tokens, tmp_lemma_tokens_tgt, new_tgt_tokens
 
-    def _annotate(self, src_tokens, src_lemmas, tgt_tokens, tgt_lemmas, src_bert_nodes_len, tgt_bert_nodes_len, id, include_tgt=False, is_test=False):
+    def _annotate(self, src_tokens, src_lemmas, tgt_tokens, tgt_lemmas, src_bert_nodes_len, tgt_bert_nodes_len, id, include_tgt=False):
 
         """
 
@@ -275,7 +275,7 @@ class LongformerData():
         src_lemma_tokens = src_lemmas
 
 
-        if include_tgt and not is_test:
+        if include_tgt:
             tgt_subgraph = Graph()
 
         """""""""""""""""""""""""""""""""""
@@ -289,7 +289,7 @@ class LongformerData():
                     graph.add_edge_batch(common_node)
 
 
-        if include_tgt and not is_test:
+        if include_tgt:
             # add to tgt subgraph
             for idx_sent, sent in enumerate(tgt_lemmas):
                 for idx_token, token in enumerate(sent):
@@ -305,7 +305,7 @@ class LongformerData():
             for idx_token, token in enumerate(sent):
                 graph.add_edge(Node(idx_sent, idx_token, s_node_txt=token, e_node_txt=' '.join(sent), s_node_lemma=src_lemma_tokens[idx_sent][idx_token]))
 
-        if include_tgt and not is_test:
+        if include_tgt:
             # add to tgt subgraph
             for idx_sent, sent in enumerate(tgt_tokens):
                 for idx_token, token in enumerate(sent):
@@ -325,17 +325,20 @@ class LongformerData():
             for subtokens in sent_subtokens:
                 src_subtokens_flat.extend(subtokens)
             lm_src_sent_len.append(sum([len(t) for t in sent_subtokens]))
+        src_subids = self.tokenizer.convert_tokens_to_ids(src_subtokens_flat)
 
-        if include_tgt and not is_test:
-            tgt_subtokens = []
-            tgt_subtokens_flat = []
-            lm_tgt_sent_len = []
-            for idx_sent, sent in enumerate(tgt_tokens):
-                sent_subtokens = [['<s>']] + self.tokenizer.tokenize_2d(sent) + [['</s>']]
-                tgt_subtokens.append(sent_subtokens)
-                for subtokens in sent_subtokens:
-                    tgt_subtokens_flat.extend(subtokens)
-                lm_tgt_sent_len.append(sum([len(t) for t in sent_subtokens]))
+
+        # if include_tgt:
+        tgt_subtokens = []
+        tgt_subtokens_flat = []
+        lm_tgt_sent_len = []
+        for idx_sent, sent in enumerate(tgt_tokens):
+            sent_subtokens = [['<s>']] + self.tokenizer.tokenize_2d(sent) + [['</s>']]
+            tgt_subtokens.append(sent_subtokens)
+            for subtokens in sent_subtokens:
+                tgt_subtokens_flat.extend(subtokens)
+            lm_tgt_sent_len.append(sum([len(t) for t in sent_subtokens]))
+        tgt_subids = self.tokenizer.convert_tokens_to_ids(tgt_subtokens_flat)
 
         """""""""""""""""""""""""""""""""""
         4. Replacing Graph IDs according to LM tokens
@@ -406,9 +409,9 @@ class LongformerData():
                 print('error')
                 os._exit(-1)
                 # import pdb;pdb.set_trace()
-        graph.set_nodes_and_edges(src_bert_nodes_len)
+        graph.set_nodes_and_edges(len(src_subtokens_flat), type='src', id=id)
 
-        if include_tgt and not is_test:
+        if include_tgt:
             # replacing target sub-graph
             for node in tgt_subgraph:
                 try:
@@ -476,14 +479,14 @@ class LongformerData():
                     print(f'error-2: {id}')
                     os._exit(-1)
                     # import pdb;pdb.set_trace()
-            tgt_subgraph.set_nodes_and_edges(tgt_bert_nodes_len)
+            tgt_subgraph.set_nodes_and_edges(len(tgt_subtokens_flat), type='tgt', id=id)
             graph.add_connections_with_tgt(tgt_subgraph)
 
-        return graph
+        return graph, src_subids, tgt_subids
 
 
     def _construct_graph(self, src_tokens, src_lemmas, tgt_tokens, tgt_lemmas, src_bert_nodes_len, tgt_bert_nodes_len, id, is_test=False):
-        return self._annotate(src_tokens, src_lemmas, tgt_tokens, tgt_lemmas, src_bert_nodes_len, tgt_bert_nodes_len, id, include_tgt=True, is_test=is_test)
+        return self._annotate(src_tokens, src_lemmas, tgt_tokens, tgt_lemmas, src_bert_nodes_len, tgt_bert_nodes_len, id, include_tgt=not is_test)
 
 
     def preprocess_single(self, src, tgt, sent_rg_scores=None, sent_rg_scores_intro=None, sent_labels=None,
@@ -614,18 +617,12 @@ class LongformerData():
                 else:
                     segments_ids_tgt += s * [1]
 
-            cls_indxes = [i for i, t in enumerate(src_subtoken_ids) if t == self.cls_vid]
+            # cls_indxes = [i for i, t in enumerate(src_subtoken_ids) if t == self.cls_vid]
             # low_sents_cls_indxes = [[i for i, t in enumerate(low_sents_subtokens_idx) if t == self.cls_vid] for low_sents_subtokens_idx  in low_sents_subtokens_idxs]
 
-            tgt_cls_indxes = [i for i, t in enumerate(tgt_subtokens_ids) if t == self.cls_vid]
-            sent_labels = sent_labels[:len(cls_indxes)]
+            # tgt_cls_indxes = [i for i, t in enumerate(tgt_subtokens_ids) if t == self.cls_vid]
 
 
-            if sent_rg_scores is not None:
-                sent_rg_scores = sent_rg_scores[:len(cls_indxes)]
-
-            if sent_rg_scores_intro is not None:
-                sent_rg_scores_intro = sent_rg_scores_intro[:len(cls_indxes)]
 
             # tgt_subtokens_str = 'madeupword0000 ' + ' madeupword0002 '.join(
             #     [' '.join(self.tokenizer.tokenize(' '.join(tt), use_bert_basic_tokenizer=use_bert_basic_tokenizer)) for tt
@@ -646,10 +643,17 @@ class LongformerData():
             print(e)
 
         ## constructing graph
-        graph = self._construct_graph(src_txt_tokens, src_lemmas, tgt_tokens, tgt_lemmas, len(src_subtoken_ids), len(tgt_subtokens_ids), id, is_test)
+        graph, src_subtoken_ids, tgt_subtokens_ids = self._construct_graph(src_txt_tokens, src_lemmas, tgt_tokens, tgt_lemmas, len(src_subtoken_ids), len(tgt_subtokens_ids), id, is_test)
 
+        cls_indxes = [i for i, t in enumerate(src_subtoken_ids) if t == self.cls_vid]
+        tgt_cls_indxes = [i for i, t in enumerate(tgt_subtokens_ids) if t == self.cls_vid]
+        sent_labels = sent_labels[:len(cls_indxes)]
 
-        # import pdb;pdb.set_trace()
+        if sent_rg_scores is not None:
+            sent_rg_scores = sent_rg_scores[:len(cls_indxes)]
+
+        if sent_rg_scores_intro is not None:
+            sent_rg_scores_intro = sent_rg_scores_intro[:len(cls_indxes)]
 
         return src_subtoken_ids, intro_summary_subtokens_ids, tgt_subtokens_ids, neg_subtokens_idxs, pos_sents_subtokens_idxs, sent_rg_scores, sent_labels, segments_ids,\
                segments_ids_intro, segments_ids_tgt, cls_indxes, neg_sents_cls_indxes, pos_sents_cls_indxes, tgt_cls_indxes, original_src_txt_str, tgt_txt, src_sents_number, src_sent_token_count, \
@@ -691,6 +695,7 @@ def format_to_bert(args):
         # for a in a_lst:
         #     _format_to_bert(a)
 
+
         # single
         # json_f = args.raw_path + '/test.0.json'
         # _format_to_bert(('test', str(json_f), args, pjoin(args.save_path, str(json_f).replace('.json', '.bert.pt')), bart,
@@ -717,8 +722,7 @@ def _format_to_bert(params):
     papers_ids = set()
     intro_labels_count = []
     intro_labels_len_count = []
-
-    is_test = corpus_type == 'test' or 'val'
+    is_test = (corpus_type == 'test' or corpus_type == 'val')
 
     CHUNK_SIZE_CONST=-1
     if args.model_name == 'longformer':
@@ -733,7 +737,7 @@ def _format_to_bert(params):
         try:
             paper_id, data_src, data_tgt, data_summary_intro = data['id'], data['src'], data['tgt'], data['intro_summary']
 
-            # if paper_id != '0912.3283':
+            # if paper_id != '0711.0215':
             #     continue
 
             if not isinstance(data_src[0][0], int):

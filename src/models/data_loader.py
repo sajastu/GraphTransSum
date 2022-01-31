@@ -55,6 +55,7 @@ class Batch(object):
 
             pre_segs = [x for x in data['segment_ids']]
             pre_clss = [x for x in data['cls_ids']]
+            pre_clss_tgt = [x for x in data['clss_tgt']]
             pre_src_sent_rg = [x for x in data['src_sent_rg']]
             pre_sent_labels = [x for x in data['sent_labels']]
             paper_id = [x for x in data['paper_id']]
@@ -65,6 +66,7 @@ class Batch(object):
 
             segs = torch.tensor(self._pad(pre_segs, 0))
             clss = torch.tensor(self._pad(pre_clss, -1))
+            clss_tgt = torch.tensor(self._pad(pre_clss_tgt, -1))
             src_sent_rg = torch.tensor(self._pad(pre_src_sent_rg, 0))
 
             sent_labels = torch.tensor(self._pad(pre_sent_labels, 0))
@@ -73,11 +75,15 @@ class Batch(object):
             mask_src = ~(src == -1)
             mask_tgt = ~(tgt == -1)
             mask_cls = ~(clss == -1)
+            mask_cls_tgt = ~(clss_tgt == -1)
+
             src[src == -1] = 0
             tgt[tgt == -1] = 0
             clss[clss == -1] = 0
+            clss_tgt[clss_tgt == -1] = 0
 
             setattr(self, 'clss', clss.to(device))
+            setattr(self, 'clss_tgt', clss_tgt.to(device))
 
             setattr(self, 'mask_cls', mask_cls.to(device))
 
@@ -264,8 +270,6 @@ class DataIterator(object):
 
     def preprocess(self, ex, is_test):
         src = ex['src']
-        intro_summary = ex['intro_summary']
-        low_sents = ex['low_sents']
         graph = ex['graph']
 
 
@@ -275,6 +279,7 @@ class DataIterator(object):
 
         segs = ex['segs']
         clss = ex['clss']
+        clss_tgt = ex['clss_tgt']
 
         src_txt = ex['src_txt']
         tgt_txt = ex['tgt_txt']
@@ -303,6 +308,7 @@ class DataIterator(object):
                 'src_txt': src_txt,
                 'tgt_txt': tgt_txt,
                 'graph': graph,
+                'clss_tgt': clss_tgt,
             }.values())
 
         else:
@@ -315,6 +321,7 @@ class DataIterator(object):
                 'cls_ids': clss,
                 'src_sent_rg': src_sent_rg,
                 'graph': graph,
+                'clss_tgt': clss_tgt,
             }.values())
 
     def batch_buffer(self, data, batch_size):
@@ -392,6 +399,7 @@ class DataIterator(object):
                         'cls_ids': [m[5] for m in minibatch],
                         'src_sent_rg': [m[6] for m in minibatch],
                         'graph': [m[7] for m in minibatch],
+                        'clss_tgt': [m[8] for m in minibatch],
                     }
                 else:
                     minibatch = {
@@ -405,6 +413,7 @@ class DataIterator(object):
                         'src_txt': [m[7] for m in minibatch],
                         'tgt_txt': [m[8] for m in minibatch],
                         'graph': [m[9] for m in minibatch],
+                        'clss_tgt': [m[10] for m in minibatch],
                     }
 
                 batch = Batch(minibatch, self.device, self.is_test)

@@ -213,8 +213,9 @@ class Trainer(object):
                         accum = 0
                         normalization = 0
 
-                        if step % self.args.val_interval == 0 :  # Validation
-                        # if step % self.args.val_interval == 0 or step == 10:
+                        # if step % self.args.val_interval == 0 :  # Validation
+                        import pdb;pdb.set_trace()
+                        if step % self.args.val_interval == 0 or step == 1:
                             # Validation
                             logger.info('----------------------------------------')
                             logger.info('Start evaluating on evaluation set... ')
@@ -319,15 +320,20 @@ class Trainer(object):
             with torch.no_grad():
                 for i, batch in enumerate(tqdm(valid_iter)):
                     src = batch.src
+                    tgt = batch.tgt
 
                     labels = batch.src_sent_labels
                     sent_rg_gold = batch.src_sent_rg
 
 
                     clss = batch.clss
-                    mask_src = batch.mask_src
+                    clss_tgt = batch.clss_tgt
+
+                    src_mask = batch.mask_src
+                    tgt_mask = batch.mask_tgt
 
                     mask_cls = batch.mask_cls
+                    # mask_cls_tgt = batch.mask_cls_tgt
 
                     paper_ids = batch.paper_id
                     segment_src = batch.src_str
@@ -336,7 +342,9 @@ class Trainer(object):
                     graph = batch.graph
                     segs = batch.segs
                     id = batch.paper_id
-                    sent_scores, mask = self.model(src, clss, mask_src, mask_cls, segs, id, graph)
+
+                    # src, tgt, src_clss, tgt_clss, src_mask, tgt_mask, src_mask_cls, src_segs, id, graph = None
+                    sent_scores, mask = self.model(src, tgt, clss, clss_tgt, src_mask, tgt_mask, mask_cls, segs, id, graph)
 
                     loss = self.loss(sent_scores, labels.float())
                     loss = (loss * mask.float()).sum()
@@ -623,19 +631,32 @@ class Trainer(object):
                 self.model.zero_grad()
 
             src = batch.src
+            tgt = batch.tgt
+
             labels = batch.src_sent_labels
+
             clss = batch.clss
-            mask = batch.mask_src
             mask_cls = batch.mask_cls
+
+            clss_tgt = batch.clss_tgt
+
+            src_mask = batch.mask_src
+            tgt_mask = batch.mask_tgt
+
+
             graph = batch.graph
+
             segs = batch.segs
             id = batch.paper_id
-            sent_scores, mask = self.model(src, clss, mask, mask_cls, segs, id, graph)
+
+            # src, tgt, src_clss, tgt_clss, src_mask, tgt_mask, src_mask_cls, src_segs, id, graph = None
+
+            sent_scores, src_mask = self.model(src, tgt, clss, clss_tgt, src_mask, tgt_mask, mask_cls, segs, id, graph)
             # import pdb;pdb.set_trace()
 
             # import pdb;pdb.set_trace()
             loss = self.loss(sent_scores, labels.float())
-            loss = (loss * mask.float()).sum()
+            loss = (loss * src_mask.float()).sum()
             (loss / loss.numel()).backward()
             # print(loss)
             # import pdb;pdb.set_trace()

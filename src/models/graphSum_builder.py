@@ -122,14 +122,15 @@ class Bert(nn.Module):
 
         self.finetune = finetune
 
-    def forward(self, x, mask_src, clss, segs):
+    def forward(self, x, mask_src, clss, segs, id=None):
         if(self.finetune):
             global_mask = torch.zeros(mask_src.shape, dtype=torch.long, device='cuda').unsqueeze(0)
             global_mask[:, :, clss.long()] = 1
             global_mask = global_mask.squeeze(0)
 
-            top_vec = self.model(x, attention_mask=mask_src.long(), global_attention_mask=global_mask)[ #,token_type_ids=segs)[
-                'last_hidden_state']
+            top_vec = self.model(x, attention_mask=mask_src.long(), global_attention_mask=global_mask)['last_hidden_state']
+            # import pdb;pdb.set_trace()
+
         else:
             self.eval()
             with torch.no_grad():
@@ -140,6 +141,22 @@ class Bert(nn.Module):
                     'last_hidden_state']
         return top_vec
 
+class MLP(nn.Module):
+  '''
+    Multilayer Perceptron.
+  '''
+  def __init__(self):
+    super().__init__()
+    self.layers = nn.Sequential(
+      nn.Linear(768 * 3, 768 * 6),
+      nn.ReLU(),
+      nn.Linear(768 * 6, 768),
+      nn.ReLU(),
+    )
+
+  def forward(self, x):
+    '''Forward pass'''
+    return self.layers(x)
 
 class ExtSummarizer(nn.Module):
     def __init__(self, args, device, checkpoint):
@@ -147,12 +164,12 @@ class ExtSummarizer(nn.Module):
         self.args = args
         self.device = device
         self.bert = Bert(args.large, args.temp_dir, args.finetune_bert)
-
+        self.mlp_combiner = MLP()
         # self.ext_layer = ExtTransformerEncoder(self.bert.model.config.hidden_size, args.ext_ff_size, args.ext_heads,
         #                                        args.ext_dropout, args.ext_layers)
 
-        # self.graph_encoder = GraphEncoder(self.bert.model.config.hidden_size, args.ext_ff_size, args.ext_heads,
-        #                                                args.ext_dropout, args.ext_layers)
+        self.graph_encoder = GraphEncoder(self.bert.model.config.hidden_size, args.ext_ff_size, args.ext_heads,
+                                                       args.ext_dropout, args.ext_layers)
 
 
         # for BertSum baseline
@@ -184,25 +201,39 @@ class ExtSummarizer(nn.Module):
 
         self.to(device)
 
-    def forward(self, src, clss, mask_src, mask_cls, segs, id, graph=None):
+    def forward(self, src, tgt, src_clss, tgt_clss, src_mask, tgt_mask, src_mask_cls, src_segs, id, graph=None):
 
-        top_vec = self.bert(src, mask_src, clss, segs)
-        # sents_vec = top_vec[torch.arange(top_vec.size(0)).unsqueeze(1), clss]
+        top_vec_src = self.bert(src, src_mask, src_clss, src_segs, id)
+        # sents_vec = top_vec_src[torch.arange(top_vec_src.size(0)).unsqueeze(1), src_clss]
         # sents_vec = sents_vec * mask_cls[:, :, None].float()
         # sent_scores, attn_nodes, attn_edge = self.ext_layer(sents_vec, mask_cls, edge_w)
         # sents_vec = top_vec[torch.arange(top_vec.size(0)).unsqueeze(1), clss]
         # sents_vec = sents_vec * mask_cls[:, :, None].float()
         # sent_scores = self.ext_layer(sents_vec, mask_cls).squeeze(-1)
 
+        top_vec_tgt = None
+        if graph[0] is not None and graph[0].tgt_subgraph is not None:
+            top_vec_tgt = self.bert(tgt, tgt_mask, tgt_clss, src_segs, id)
+
+
         # for BertSum baseline
-        top_vec_sents = top_vec[torch.arange(top_vec.size(0)).unsqueeze(1), clss]
-        sent_scores = self.sigmoid(self.wo(top_vec_sents)).squeeze(-1)
+        # top_vec_sents = top_vec_src[torch.arange(top_vec_src.size(0)).unsqueeze(1), src_clss]
+        # sent_scores = self.sigmoid(self.wo(top_vec_sents)).squeeze(-1)
 
 
-        # sent_scores = self.graph_encoder(top_vec, clss, mask_cls, mask_src, src, id, graph=graph)
+        graph_nodes, graph_clss_indxs, virtual_node = self.graph_encoder(top_vec_src, top_vec_tgt, src_clss, tgt_clss, src_mask_cls, src_mask, src, id, graph=graph)
+        # graph_nodes = graph_nodes.unsqueeze(0)
+        graph_sents_nodes = graph_nodes.unsqueeze(0)[torch.arange(graph_nodes.unsqueeze(0).size(0)).unsqueeze(1), graph_clss_indxs]
+        sents_vec = top_vec_src[torch.arange(top_vec_src.size(0)).unsqueeze(1), src_clss]
 
-        # sent_scores = sent_scores.squeeze(-1)
-        return sent_scores, mask_cls
+        # combine embeddings of [interaction node] and [graph's source sentences nodes] with top_vec_src
+
+        combined_sents_vector = torch.cat((graph_sents_nodes, sents_vec, virtual_node.unsqueeze(1).repeat(1, src_clss.size(1), 1)), dim=-1)
+        top_sents_informed_vecs = self.mlp_combiner(combined_sents_vector)
+        sent_scores = self.sigmoid(self.wo(top_sents_informed_vecs))
+        sent_scores = sent_scores.squeeze(-1)  # * mask.float()
+
+        return sent_scores, src_mask_cls
         # return sent_scores, mask_cls, None, None
 
 

@@ -3,6 +3,7 @@ import math
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+import numpy as np
 
 from models.GraphConvo import GraphConvolution
 from models.neural import MultiHeadedAttention, PositionwiseFeedForward
@@ -302,44 +303,62 @@ class ExtTransformerEncoder(nn.Module):
 import torch.nn.functional as F
 from torch_geometric.datasets import Planetoid
 import torch_geometric.transforms as T
-from torch_geometric.nn import GCNConv, ChebConv  # noqa
+from torch_geometric.nn import GATConv, ChebConv  # noqa
 
 
 class GraphEncoder(nn.Module):
     def __init__(self, d_model, d_ff, heads, dropout, num_inter_layers=2):
         super(GraphEncoder, self).__init__()
-        # self.conv1 = GATConv(768, 96, heads=8, dropout=0.6)
-        # On the Pubmed dataset, use heads=8 in conv2.
-        # self.conv2 = GATConv(96 * 8, 768, heads=1, concat=False,
-        #                      dropout=0.6)
 
-        self.conv1 = GCNConv(768, 1024)
-        self.conv2 = GCNConv(1024, 768)
+        self.conv1 = GATConv(768, 96, heads=8, dropout=0.6)
+        self.conv2 = GATConv(96 * 8, 768, heads=1, concat=False,
+                             dropout=0.1)
+
+        self.graph_virtual_node = nn.Embedding(1, 768)
+
+        # self.conv1 = GCNConv(768, 1024)
+        # self.conv2 = GCNConv(1024, 768)
 
         # self.gc1 = GraphConvolution(768, 768)
         # self.gc2 = GraphConvolution(768, 768)
         # self.dropout = dropout
 
 
-        self.wo = nn.Linear(d_model, 1, bias=True)
-        self.sigmoid = nn.Sigmoid()
-
         # self.embedding_e = nn.Linear(1, 32)
 
 
-    def forward(self, x, clss, mask_clss, mask_src, src, id, graph=None):
+    def forward(self, src_bert_embeds, tgt_bert_embeds, src_clss, tgt_clss, src_mask_clss, mask_src, src, id, graph=None):
         """
 
-        :param x: [B, N, DIM]  (t_j)
+        :param src_bert_embeds: [B, N, DIM]  (t_j)
         :param mask: [B, N] (m_j)
         :param graph: [B, 1] Graph representation
         :return:
 
         """
-
         graph = graph[0] # for batch of 1
 
-        x, clss_graph, adj = graph._prepare_graph(x, clss, mask_clss, mask_src, src, id)
+        graph_embeds, clss_ids_graph, clss_ids_tgt_graph, adj = graph._prepare_graph(
+            src_bert_embeds, tgt_bert_embeds, src_clss, tgt_clss, src_mask_clss, mask_src, src, id
+        )
+        # 1. add virtual node amd update graph embeds
+        graph_token_feature = self.graph_virtual_node.weight.unsqueeze(0)
+        graph_embeds = torch.cat([graph_embeds, graph_token_feature], dim=1)
+
+        # 2. update adjacency matrix w.r.t source and target (train) sentence ids
+        virtual_node_connections = np.zeros((1, adj.shape[1]), dtype=np.long)
+        adj = np.concatenate((adj, virtual_node_connections), axis=0)
+
+        virtual_node_connections = np.zeros((1, adj.shape[1]+1), dtype=np.long)
+        virtual_node_connections[:, clss_ids_graph.cpu().numpy().astype(int)] = 1
+        virtual_node_connections[:, clss_ids_tgt_graph.cpu().numpy().astype(int)] = 1
+        adj = np.concatenate((adj, virtual_node_connections.transpose()), axis=1)
+
+        adj = torch.from_numpy(adj)
+
+
+        # add one new dimension to adjacency matrix
+
         adj = adj.type(torch.FloatTensor).cuda()
         # x = x.squeeze(0)
         # # import pdb;pdb.set_trace()
@@ -352,40 +371,40 @@ class GraphEncoder(nn.Module):
 
         # adj_t = adj_t.unsqueeze(1)
         edge_index = (adj > 0).nonzero().t()
-        row, col = edge_index
-        edge_weight = adj[row, col]
+        # row, col = edge_index
+        # edge_weight = adj[row, col]
 
         # ensure tensors are in the proper type and device...
-        edge_weight = edge_weight.type(torch.FloatTensor).cuda()
-        clss_graph = clss_graph.type(torch.LongTensor).cuda()
+        # edge_weight = edge_weight.type(torch.FloatTensor).cuda()
+
 
         # ensure tensors are in cuda device
         edge_index = edge_index.cuda()
-        edge_weight = edge_weight
+        # edge_weight = edge_weight
 
-        x = x.squeeze(0) # [node_size, feat]
+        graph_embeds = graph_embeds.squeeze(0) # [node_size, feat]
 
-        x = F.relu(self.conv1(x, edge_index=edge_index, edge_weight=edge_weight))
-        x = F.dropout(x, training=self.training)
-        x = self.conv2(x, edge_index, edge_weight)
+        # graph_embeds = F.relu(self.conv1(graph_embeds, edge_index=edge_index, edge_weight=edge_weight))
+        # graph_embeds = F.dropout(graph_embeds, training=self.training)
+        # graph_embeds = self.conv2(graph_embeds, edge_index, edge_weight)
+        # graph_embeds = F.log_softmax(graph_embeds, dim=1)
+        graph_embeds = F.dropout(graph_embeds, p=0.1, training=self.training)
+        graph_embeds = F.elu(self.conv1(graph_embeds, edge_index))
+        graph_embeds = F.dropout(graph_embeds, p=0.1, training=self.training)
+        graph_embeds = self.conv2(graph_embeds, edge_index)
 
-        x = F.log_softmax(x, dim=1)
-
-        # x = self.conv1(x, edge_index).relu()
-        # x = self.conv2(x, edge_index)
 
         ##################################
 
-        x = x.unsqueeze(0)
+        # src_bert_embeds = src_bert_embeds.unsqueeze(0)
+        clss_ids_graph = clss_ids_graph.type(torch.LongTensor).cuda()
+        # graph_src_sents_embeds = graph_embeds[torch.arange(graph_embeds.size(0)).unsqueeze(1), clss_ids_graph]
 
-        x = x[torch.arange(x.size(0)).unsqueeze(1), clss_graph]
-
-        sent_scores = self.sigmoid(self.wo(x))
+        # sent_scores = self.sigmoid(self.wo(src_bert_embeds))
         # import pdb;pdb.set_trace()
 
-        sent_scores = sent_scores.squeeze(-1) #* mask.float()
-
-        return sent_scores
+        # sent_scores = sent_scores.squeeze(-1) #* mask.float()
+        return graph_embeds, clss_ids_graph, graph_embeds[-1, :][None,:]
 
 
 

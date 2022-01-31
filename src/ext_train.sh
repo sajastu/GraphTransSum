@@ -4,6 +4,7 @@
 ##### CHECKPOINTS –to train from #######
 ################################################################################
 #CHECKPOINT=/disk1/sajad/sci-trained-models/presum/arxiv-first-phase/model_step_30000.pt
+METHOD=LonfromerSum-reduced-graphTGT
 
 export SERVER=$(hostname)
 
@@ -45,7 +46,6 @@ BSZ=1
 ##### MODEL #######
 ################################################################################
 MODEL_DB=`echo $DATASET | tr 'a-z' 'A-Z'`
-METHOD=BERTSUM-graphCompar-reduced
 #METHOD=BERTSUM-reduced
 export MODEL_PATH=/disk1/sajad/sci-trained-models/presum/$MODEL_DB-$MAX_POS-$METHOD-$SERVER/
 
